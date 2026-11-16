@@ -1,12 +1,37 @@
+# ── 依赖 ─────────────────────────────
 node_modules/
+
+# ── 前端构建产物（vite）────────────────
 dist/
+
+# ── 本地生成的应用图标源文件（scripts/gen-icon.mjs 产出）
+assets/icon.png
+
+# ── Rust / Tauri 构建产物 ─────────────
 target/
 src-tauri/target/
+# tauri 生成的 ACL 清单 / schema
 src-tauri/gen/
-assets/icon.png
+
+# ── 本地临时目录 ──────────────────────
+tmp-tests/
+*.tmp-tests/
+
+# ── 运行日志（应用写在 exe 同目录）────
 *.log
-# 本地签名证书（私钥）绝不可进仓库
+
+# ── 本地签名证书（私钥）绝不入库 ───────
 *.pfx
-# 开发期调试截图（非发布物料）
+*.p12
+tauri.conf.*.json
+
+# ── 开发期调试截图（非发布物料）────────
 after-fix.png
 after-v2.png
+
+# ── 平台 / 编辑器杂项 ─────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
