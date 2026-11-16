@@ -141,6 +141,16 @@ npm run build
 | `scripts/gen-icon.mjs` | 重新生成 `assets/icon.png`（零依赖手写 PNG 编码） | 无 |
 | `scripts/drag-experiment.ps1` | 开发者调试用：模拟鼠标把桌面图标拖进盒子，验证 OLE 拖放链路 | 开发 |
 
+## 📌 更新记录
+
+- **v0.2.1**（当前）
+  - 修复：低完整性令牌（SmartScreen「仍要运行」）下启动崩溃 —— WebView 数据目录与日志均改为「可写才用」逐级降级
+  - 修复：收纳移动失败时复制+删除兜底路径可能误覆盖同名目标（现加存在性校验，宁报错不覆盖）
+  - 修复：内置预设分类（含默认「收纳盒」）此前可被误删，现在不可删、可停用/隐藏；用户自定义盒仍可删（文件自动还原）
+  - 增强：盒子窗口创建失败不再是启动级故障，主面板可一键「重建盒子窗口」
+  - 新增：盒子内多选（Ctrl/Shift）+ 批量删除 / 移入其他盒 / 还原
+  - 清理：发布前安全清理（本地签名私钥不入库）、脚本安全化（计划任务与全局 SmartScreen 修改均改为显式 opt-in）
+
 ## 🙏 致谢
 
 设计与交互参考了同类开源项目的优秀实践：[DeskBox](https://github.com/Tianyu199509/DeskBox)、[desktop-organizer 主题下的各项目](https://github.com/topics/desktop-organizer)。
