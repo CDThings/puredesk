@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Type check + build frontend
+        run: npm run build
+
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test --release
+
+      - name: Build release binary
+        working-directory: src-tauri
+        run: cargo build --release --features custom-protocol
+
+      - name: Build installer (NSIS)
+        env:
+          # 无签名证书时跳过签名步骤
+          TAURI_SIGNING_PRIVATE_KEY: ""
+        run: |
+          npx tauri build --config '{"bundle":{"targets":["nsis"]}}' || echo "bundle skipped"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: puredesk-windows
+          path: |
+            src-tauri/target/release/puredesk.exe
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: ignore

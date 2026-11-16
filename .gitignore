@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/
+assets/icon.png
+*.log
+# 本地签名证书（私钥）绝不可进仓库
+*.pfx
+# 开发期调试截图（非发布物料）
+after-fix.png
+after-v2.png
