@@ -74,17 +74,34 @@ pub async fn get_runtime_info() -> Result<serde_json::Value, String> {
                 }
             }
         };
+        // 桌面重定向检测（OneDrive KFM 等网盘接管桌面是整理类软件的最大翻车源）
+        let ddir = crate::scan::desktop_dir();
+        let redirected = {
+            let expect = dirs::home_dir().map(|h| h.join("Desktop"));
+            match expect {
+                Some(h) => !crate::scan::same_path(&ddir, &h),
+                None => false,
+            }
+        };
+        if redirected {
+            crate::logging::log_line(&format!(
+                "runtime self-check: desktop redirected away from %USERPROFILE%\\Desktop -> {}",
+                ddir.display()
+            ));
+        }
         crate::logging::log_line(&format!(
-            "runtime self-check: IL=0x{integrity:X} low={}",
+            "runtime self-check: IL=0x{integrity:X} low={} redirected={redirected}",
             integrity < 0x2000
         ));
         Ok(serde_json::json!({
             "integrity": format!("0x{integrity:X}"),
             "lowIntegrity": integrity < 0x2000,
+            "desktopDir": ddir.to_string_lossy(),
+            "desktopRedirected": redirected,
         }))
     }
     #[cfg(not(windows))]
-    Ok(serde_json::json!({ "integrity": "n/a", "lowIntegrity": false }))
+    Ok(serde_json::json!({ "integrity": "n/a", "lowIntegrity": false, "desktopDir": "", "desktopRedirected": false }))
 }
 
 /// 调试用：前端把拖拽事件写入日志，用于诊断系统级拖放是否到达
@@ -142,6 +159,46 @@ pub async fn restore_paths(app: AppHandle, paths: Vec<String>) -> Result<Organiz
     let report = organize::restore_to_desktop(&cfg, &paths);
     notify_changes(&app);
     Ok(report)
+}
+
+/// 一键还原全部：把所有启用盒子里的内容移回桌面根目录（“恢复我原来的桌面”）
+#[tauri::command]
+pub async fn restore_all(app: AppHandle) -> Result<OrganizeReport, String> {
+    let cfg = current_config(&app);
+    app.state::<AppState>().suppress_auto_organize(8);
+    let app_state = app.state::<AppState>();
+    let _guard = app_state.move_guard();
+    let report = organize::restore_all_to_desktop(&cfg);
+    crate::logging::log_line(&format!(
+        "restore_all: moved {} failed {}",
+        report.moved.len(),
+        report.failed.len()
+    ));
+    crate::refresh_storage_visibility(&app);
+    notify_changes(&app);
+    Ok(report)
+}
+
+/// 撤销最近一次收纳批次：把上次整理/拖入盒子的文件反向搬回原位
+#[tauri::command]
+pub async fn undo_last_organize(app: AppHandle) -> Result<OrganizeReport, String> {
+    app.state::<AppState>().suppress_auto_organize(8);
+    let app_state = app.state::<AppState>();
+    let _guard = app_state.move_guard();
+    let report = organize::undo_last_batch();
+    crate::refresh_storage_visibility(&app);
+    notify_changes(&app);
+    Ok(report)
+}
+
+/// 存储区自检修复：清理“目录被搬进自身子树”产生的嵌套骨架（历史事故自愈）。
+/// 返回 (删除的空骨架数, 抢救出的含文件副本数)。
+#[tauri::command]
+pub async fn repair_storage(app: AppHandle) -> Result<(usize, usize), String> {
+    let cfg = current_config(&app);
+    let r = organize::cleanup_nested_storage_junk(&cfg);
+    notify_changes(&app);
+    Ok(r)
 }
 
 #[tauri::command]

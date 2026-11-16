@@ -25,6 +25,11 @@ tmp-tests/
 *.p12
 tauri.conf.*.json
 
+# ── 运行时本地文件（exe 同目录降级产物 / 本地覆写配置）──
+webview-data/
+*.local.json
+moves.jsonl
+
 # ── 开发期调试截图（非发布物料）────────
 after-fix.png
 after-v2.png

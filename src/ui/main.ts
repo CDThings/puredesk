@@ -40,12 +40,22 @@ export function initMain(): void {
             <span>② 在下方「收纳存储位置」改到非桌面路径（如 E:\PureDesk 存储）。</span>
           </div>
         </section>
+        <section class="warn-banner" id="onedrive-banner" hidden>
+          <div class="warn-text">
+            <b>⚠️ 桌面已被 OneDrive / 网盘重定向</b>
+            <span>你的桌面路径不在本机（<span id="onedrive-path"></span>）。整理类软件与网盘同步共存易冲突（文件被“收走”或双向搬运）。建议：</span>
+            <span>① OneDrive 设置 → 同步和备份 → 管理备份 → 停止“桌面”备份，把桌面恢复到本机路径；</span>
+            <span>② 或在「设置」把收纳存储位置改到非桌面路径，并谨慎使用自动整理。</span>
+          </div>
+        </section>
         <section class="hero">
           <div class="stats" id="stats"></div>
           <div class="actions">
             <label class="switch" title="新文件自动归入收纳盒">
               <input type="checkbox" id="auto-toggle"><i></i><span>自动整理</span>
             </label>
+            <button id="btn-undo" title="把最近一次整理/拖入盒子的文件搬回原位">${svg.undo} 撤销上次整理</button>
+            <button id="btn-restore-all" title="把所有盒子里的文件全部放回桌面">${svg.undo} 全部还原</button>
             <button class="primary" id="btn-organize">${svg.bolt} 一键整理</button>
           </div>
         </section>
@@ -78,6 +88,15 @@ export function initMain(): void {
       if (banner && info.lowIntegrity) {
         banner.hidden = false;
         document.querySelector(".app")!.classList.add("low-il");
+      }
+      // 桌面被 OneDrive/网盘重定向：整理与同步共存易冲突，提前警告
+      if (info.desktopRedirected) {
+        const od = document.getElementById("onedrive-banner");
+        if (od) {
+          od.hidden = false;
+          const p = document.getElementById("onedrive-path");
+          if (p) p.textContent = info.desktopDir;
+        }
       }
     })
     .catch(() => undefined);
@@ -148,6 +167,8 @@ function bindStatic(): void {
   });
 
   document.getElementById("btn-organize")!.addEventListener("click", () => void doOrganize());
+  document.getElementById("btn-undo")!.addEventListener("click", () => void doUndo());
+  document.getElementById("btn-restore-all")!.addEventListener("click", () => void doRestoreAll());
 
   document.getElementById("auto-toggle")!.addEventListener("change", async (e) => {
     if (!config) return;
@@ -291,6 +312,52 @@ async function doOrganize(): Promise<void> {
     reportToast(r);
   } catch (e) {
     toast(`整理失败: ${e}`);
+  } finally {
+    busy = false;
+    btn.classList.remove("loading");
+    setStatus("");
+  }
+}
+
+async function doUndo(): Promise<void> {
+  if (busy) return;
+  busy = true;
+  const btn = document.getElementById("btn-undo")!;
+  btn.classList.add("loading");
+  try {
+    const r = await api.undoLastOrganize();
+    const moved = r.moved?.length ?? 0;
+    if (moved > 0) {
+      toast(`已撤销：${moved} 项搬回原位${r.failed.length ? `，${r.failed.length} 项失败` : ""}`);
+    } else if (r.skipped > 0) {
+      toast("没有可撤销的整理记录");
+    } else {
+      toast("撤销完成（没有需要搬回的文件）");
+    }
+  } catch (e) {
+    toast(`撤销失败: ${e}`);
+  } finally {
+    busy = false;
+    btn.classList.remove("loading");
+  }
+}
+
+async function doRestoreAll(): Promise<void> {
+  if (busy) return;
+  busy = true;
+  const btn = document.getElementById("btn-restore-all")!;
+  btn.classList.add("loading");
+  setStatus("还原中…");
+  try {
+    const r = await api.restoreAll();
+    const moved = r.moved?.length ?? 0;
+    toast(
+      moved > 0
+        ? `已还原 ${moved} 项到桌面${r.failed.length ? `，${r.failed.length} 项失败` : ""}`
+        : "盒子里没有可还原的文件",
+    );
+  } catch (e) {
+    toast(`还原失败: ${e}`);
   } finally {
     busy = false;
     btn.classList.remove("loading");

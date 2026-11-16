@@ -1,6 +1,6 @@
 [package]
 name = "puredesk"
-version = "0.2.1"
+version = "0.2.2"
 description = "PureDesk · 轻量级 Windows 桌面整理收纳工具"
 authors = ["you"]
 edition = "2021"

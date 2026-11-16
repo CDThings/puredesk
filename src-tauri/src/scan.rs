@@ -173,6 +173,15 @@ pub fn scan_dir(dir: &Path, storage_root: &Path, cfg: &Config, public: bool, out
             continue;
         }
         let Ok(md) = entry.metadata() else { continue };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // junction/symlink 一律不参与扫描与整理：链接可能成环
+            // （如指向桌面自身的 junction 会让收纳/删除陷入无限递归）
+            if md.file_attributes() & crate::winutil::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                continue;
+            }
+        }
         if is_hidden(&md) {
             continue;
         }
@@ -218,14 +227,18 @@ pub fn scan_boxes(cfg: &Config, storage_root: &Path) -> Vec<BoxSnapshot> {
     out
 }
 
-/// 完整扫描：用户桌面 + 公共桌面 + 盒子
+/// 完整扫描：用户桌面 + 公共桌面 + 盒子。
+/// 公共桌面仅在「整理公共桌面」开启时参与展示——
+/// 未开启时这些机器级快捷方式永远不可能被整理，列进“待整理”只会造成噪音。
 pub fn full_scan(cfg: &Config) -> ScanPayload {
     let storage_root = resolve_storage_root(cfg);
     let ddir = desktop_dir();
     let mut items = Vec::new();
     scan_dir(&ddir, &storage_root, cfg, false, &mut items);
-    if let Some(pdir) = public_desktop_dir() {
-        scan_dir(&pdir, &storage_root, cfg, true, &mut items);
+    if cfg.organize_public_desktop {
+        if let Some(pdir) = public_desktop_dir() {
+            scan_dir(&pdir, &storage_root, cfg, true, &mut items);
+        }
     }
     items.sort_by_key(|i| i.name.to_lowercase());
     ScanPayload {

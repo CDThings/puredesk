@@ -77,7 +77,7 @@ export interface OrganizeReport {
 export const api = {
   scan: () => invoke<ScanPayload>("scan_desktop"),
   runtimeInfo: () =>
-    invoke<{ integrity: string; lowIntegrity: boolean }>("get_runtime_info"),
+    invoke<{ integrity: string; lowIntegrity: boolean; desktopDir: string; desktopRedirected: boolean }>("get_runtime_info"),
   organize: () => invoke<OrganizeReport>("organize_desktop"),
   organizeCategory: (boxId: string) =>
     invoke<OrganizeReport>("organize_category", { boxId }),
@@ -88,6 +88,10 @@ export const api = {
   organizePaths: (paths: string[], boxId: string) =>
     invoke<OrganizeReport>("organize_paths", { paths, boxId }),
   restore: (paths: string[]) => invoke<OrganizeReport>("restore_paths", { paths }),
+  /** 一键还原全部：所有启用盒子的内容回到桌面根 */
+  restoreAll: () => invoke<OrganizeReport>("restore_all"),
+  /** 撤销最近一次收纳批次（反向搬回原位） */
+  undoLastOrganize: () => invoke<OrganizeReport>("undo_last_organize"),
   open: (path: string) => invoke<void>("open_path", { path }),
   reveal: (path: string) => invoke<void>("reveal_path", { path }),
   icons: (paths: string[]) =>

@@ -58,9 +58,45 @@ pub fn unique_destination(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{} ({}){}", stem, stamp, ext))
 }
 
+/// 目标路径是否位于源目录自身内部（或与源相同）。
+/// 把目录搬进它自己的子树是“自我复制爆炸”的根源——rename 失败后若走
+/// copy 兜底，会把源不断复制进自身直到路径超限（本机曾实际产生 306 层
+/// 嵌套空目录、Explorer 无法删除也无法看到底部）。任何移动前必须拒绝。
+pub fn dst_inside_src(src: &Path, dst: &Path) -> bool {
+    if let (Ok(cs), Ok(cd)) = (std::fs::canonicalize(src), std::fs::canonicalize(dst)) {
+        return cd.starts_with(&cs);
+    }
+    // dst 尚不存在时 canonicalize 必然失败，退而检查其父目录
+    if let Some(parent) = dst.parent() {
+        if let (Ok(cs), Ok(cd)) = (std::fs::canonicalize(src), std::fs::canonicalize(parent)) {
+            return cd.starts_with(&cs);
+        }
+    }
+    // 字符串兜底（canonicalize 不可用时）
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .to_lowercase()
+            .trim_end_matches(['\\', '/'])
+            .to_string()
+    };
+    let (sn, dn) = (norm(src), norm(dst));
+    dn == sn || dn.starts_with(&format!("{sn}\\"))
+}
+
+/// 复制深度上限：正常桌面目录树远达不到；纯保险丝，防止失控复制
+const MAX_COPY_DEPTH: usize = 128;
+
 /// 移动文件/目录：优先 rename（失败重试 3 次，瞬时占用常会自行解除），
 /// 跨盘时退化为复制+删除；源被占用时清理掉半成品副本，避免重复。
+/// 硬性前提：目标不得位于源自身内部（防自环，见 dst_inside_src）。
 pub fn move_path(src: &Path, dst: &Path) -> Result<(), String> {
+    if dst_inside_src(src, dst) {
+        return Err(format!(
+            "拒绝移动：目标位于源目录内部（防自环保护）: {} -> {}",
+            src.display(),
+            dst.display()
+        ));
+    }
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("创建目录失败 {}: {}", parent.display(), e))?;
@@ -81,7 +117,7 @@ pub fn move_path(src: &Path, dst: &Path) -> Result<(), String> {
         return Err(format!("目标已存在且无法移动: {last_err}"));
     }
     if src.is_dir() {
-        if let Err(e) = copy_dir_recursive(src, dst) {
+        if let Err(e) = copy_dir_recursive(src, dst, 0) {
             return Err(format!("复制目录失败: {e}"));
         }
         if std::fs::remove_dir_all(src).is_err() {
@@ -100,13 +136,33 @@ pub fn move_path(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+fn copy_dir_recursive(src: &Path, dst: &Path, depth: usize) -> Result<(), String> {
+    if depth > MAX_COPY_DEPTH {
+        return Err(format!("目录嵌套超过 {MAX_COPY_DEPTH} 层，中止复制（防失控保险丝）"));
+    }
+    if dst_inside_src(src, dst) {
+        return Err(format!(
+            "拒绝复制：目标位于源内部: {} -> {}",
+            src.display(),
+            dst.display()
+        ));
+    }
     std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
         let t = entry.path();
+        // junction/symlink 不复制目标内容（防止成环路径被搬进收纳区）
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if let Ok(md) = entry.metadata() {
+                if md.file_attributes() & crate::winutil::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    continue;
+                }
+            }
+        }
         let d = dst.join(entry.file_name());
         if t.is_dir() {
-            copy_dir_recursive(&t, &d)?;
+            copy_dir_recursive(&t, &d, depth + 1)?;
         } else {
             std::fs::copy(&t, &d).map_err(|e| e.to_string())?;
         }
@@ -201,6 +257,7 @@ pub fn move_into_box_in(
             Err(e) => report.failed.push(FailedEntry { path: p.clone(), error: e }),
         }
     }
+    journal_batch(&report);
     report
 }
 
@@ -279,6 +336,7 @@ pub fn organize_dir_filtered(
             }
         }
     }
+    journal_batch(&report);
     report
 }
 
@@ -460,6 +518,267 @@ pub fn migrate_single_box_files(cfg: &mut Config) -> usize {
     moved
 }
 
+/// 目录树内是否含有任何文件（迭代实现防栈溢出，不跟随 reparse point）
+fn has_any_file(root: &Path) -> Result<bool, ()> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(d) = stack.pop() {
+        visited += 1;
+        if visited > 100_000 {
+            return Err(()); // 规模异常，宁可保守处理
+        }
+        let rd = std::fs::read_dir(&d).map_err(|_| ())?;
+        for e in rd.flatten() {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if let Ok(md) = e.metadata() {
+                    if md.file_attributes() & crate::winutil::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                        continue;
+                    }
+                }
+            }
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// 自愈：清理历史上因“目录被搬进自身子树”产生的嵌套存储骨架。
+/// 特征：某个分类文件夹里出现与存储根目录同名的子目录
+/// （如 收纳盒\桌面整理\应用\桌面整理\应用\… 深达数百层）。
+/// 处理策略：
+/// - 内部没有任何文件（纯空目录骨架）→ 整树删除（无数据损失）；
+/// - 含文件（真实数据被卷进去）→ 原样搬到桌面根、重命名为唯一名，交还用户处置；
+/// 返回 (删除的空骨架数, 搬出到桌面的目录数)。
+pub fn cleanup_nested_storage_junk(cfg: &Config) -> (usize, usize) {
+    cleanup_nested_storage_junk_in(cfg, &scan::desktop_dir())
+}
+
+/// 核心实现（接受显式桌面目录以便测试）
+pub fn cleanup_nested_storage_junk_in(cfg: &Config, desktop: &Path) -> (usize, usize) {
+    let storage = scan::resolve_storage_root(cfg);
+    let Some(root_name) = storage.file_name().map(|n| n.to_string_lossy().to_string()) else {
+        return (0, 0);
+    };
+    let desktop = desktop.to_path_buf();
+    let (mut removed, mut rescued) = (0, 0);
+    for c in &cfg.categories {
+        let cat_dir = storage.join(&c.folder);
+        let Ok(rd) = std::fs::read_dir(&cat_dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_dir() {
+                continue;
+            }
+            if e.file_name().to_string_lossy() != root_name {
+                continue;
+            }
+            if scan::same_path(&p, &storage) {
+                continue;
+            }
+            match has_any_file(&p) {
+                Ok(false) => {
+                    if std::fs::remove_dir_all(&p).is_ok() {
+                        removed += 1;
+                        crate::logging::log_line(&format!(
+                            "self-heal: removed nested empty storage skeleton: {}",
+                            p.display()
+                        ));
+                    }
+                }
+                Ok(true) => {
+                    let dst = unique_destination(&desktop, &root_name);
+                    if move_path(&p, &dst).is_ok() {
+                        rescued += 1;
+                        crate::logging::log_line(&format!(
+                            "self-heal: rescued nested storage copy (contains files) to {}",
+                            dst.display()
+                        ));
+                    }
+                }
+                Err(_) => {
+                    crate::logging::log_line(&format!(
+                        "self-heal: suspicious deep tree too large to judge, left untouched: {}",
+                        p.display()
+                    ));
+                }
+            }
+        }
+    }
+    (removed, rescued)
+}
+
+/// 一键还原：把所有启用盒子里的内容全部移回桌面根目录。
+/// 与逐条 restore 的区别：一次收集全部盒内条目、统一还原，适合“恢复我原来的桌面”。
+pub fn restore_all_to_desktop(cfg: &Config) -> OrganizeReport {
+    restore_all_to_dir(cfg, &scan::desktop_dir())
+}
+
+// ── 移动日志（撤销支持）────────────────────────────────────────────
+// 每次收纳移动按批次记录到配置目录 moves.jsonl，「撤销上次整理」把最近
+// 一个批次反向搬回。还原（restore）不入账——它本身就是回退操作。
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct JournalLine {
+    batch: u64,
+    from: String,
+    to: String,
+}
+
+/// 保留的批次上限（超出丢弃最旧批次）
+const JOURNAL_MAX_BATCHES: usize = 50;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn journal_write_batch(dir: &Path, batch: u64, moved: &[MovedEntry]) {
+    if moved.is_empty() {
+        return;
+    }
+    let f = dir.join("moves.jsonl");
+    let mut buf = String::new();
+    for m in moved {
+        let line = JournalLine { batch, from: m.from.clone(), to: m.to.clone() };
+        if let Ok(s) = serde_json::to_string(&line) {
+            buf.push_str(&s);
+            buf.push('\n');
+        }
+    }
+    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&f) {
+        let _ = std::io::Write::write_all(&mut fh, buf.as_bytes());
+    }
+}
+
+fn journal_append_in(dir: &Path, report: &OrganizeReport) {
+    journal_write_batch(dir, now_ms(), &report.moved);
+}
+
+/// 对外：记录一批成功移动（写入真实配置目录）。
+/// 测试构建下为空操作，避免测试把假移动写进真实撤销日志。
+#[cfg(not(test))]
+pub fn journal_batch(report: &OrganizeReport) {
+    if let Some(dir) = crate::config::config_path().parent().map(|p| p.to_path_buf()) {
+        journal_append_in(&dir, report);
+    }
+}
+
+#[cfg(test)]
+pub fn journal_batch(_report: &OrganizeReport) {}
+
+/// 撤销最近一个收纳批次：逐条反向搬回（核心，接受显式日志目录以便测试）
+pub fn undo_last_batch_in(journal_dir: &Path) -> OrganizeReport {
+    let mut report = OrganizeReport::default();
+    let f = journal_dir.join("moves.jsonl");
+    let Ok(content) = std::fs::read_to_string(&f) else {
+        report.skipped += 1;
+        return report;
+    };
+    let lines: Vec<JournalLine> = content
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if lines.is_empty() {
+        report.skipped += 1;
+        return report;
+    }
+    let last = lines.iter().map(|l| l.batch).max().unwrap();
+    let batch: Vec<&JournalLine> = lines.iter().filter(|l| l.batch == last).collect();
+
+    for e in batch.iter().rev() {
+        let cur = PathBuf::from(&e.to);
+        if !cur.exists() {
+            report.skipped += 1; // 用户已自行挪走/删除，跳过
+            continue;
+        }
+        let orig = PathBuf::from(&e.from);
+        let dst = if orig.exists() {
+            // 原位已被占用（用户新放了同名文件）→ 改名放回，不覆盖
+            let name = cur
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            unique_destination(orig.parent().unwrap_or(Path::new(".")), &name)
+        } else {
+            orig
+        };
+        match move_path(&cur, &dst) {
+            Ok(()) => report.moved.push(MovedEntry {
+                from: e.to.clone(),
+                to: dst.to_string_lossy().to_string(),
+                category: "undo".into(),
+            }),
+            Err(err) => report.failed.push(FailedEntry { path: e.to.clone(), error: err }),
+        }
+    }
+
+    // 从日志剔除该批次，并裁剪到最近 JOURNAL_MAX_BATCHES 个批次
+    let mut batches: Vec<u64> = lines.iter().map(|l| l.batch).collect();
+    batches.sort_unstable();
+    batches.dedup();
+    let keep: std::collections::HashSet<u64> = batches
+        .iter()
+        .rev()
+        .take(JOURNAL_MAX_BATCHES)
+        .copied()
+        .collect();
+    let mut out = String::new();
+    for l in &lines {
+        if l.batch != last && keep.contains(&l.batch) {
+            if let Ok(s) = serde_json::to_string(l) {
+                out.push_str(&s);
+                out.push('\n');
+            }
+        }
+    }
+    let _ = std::fs::write(&f, out);
+    crate::logging::log_line(&format!(
+        "undo_last_batch: moved {} failed {} skipped {}",
+        report.moved.len(),
+        report.failed.len(),
+        report.skipped
+    ));
+    report
+}
+
+/// 对外：撤销最近一次收纳（读取真实配置目录的日志）
+pub fn undo_last_batch() -> OrganizeReport {
+    match crate::config::config_path().parent().map(|p| p.to_path_buf()) {
+        Some(dir) => undo_last_batch_in(&dir),
+        None => OrganizeReport::default(),
+    }
+}
+
+/// 核心实现（接受显式桌面目录以便测试）
+pub fn restore_all_to_dir(cfg: &Config, desktop: &Path) -> OrganizeReport {
+    let storage = scan::resolve_storage_root(cfg);
+    let mut paths = HashSet::new();
+    for c in &cfg.categories {
+        if !c.enabled {
+            continue;
+        }
+        if let Ok(rd) = std::fs::read_dir(storage.join(&c.folder)) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.eq_ignore_ascii_case("desktop.ini") {
+                    continue;
+                }
+                paths.insert(e.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    let list: Vec<String> = paths.into_iter().collect();
+    restore_to_dir(cfg, desktop, &list)
+}
 
 #[cfg(test)]
 mod tests {
@@ -650,6 +969,159 @@ mod tests {
         assert_eq!(r.skipped, 1, "同盒内移动应跳过而非报错: {r:?}");
         assert!(r.moved.is_empty() && r.failed.is_empty());
         assert!(docs.join("a.txt").exists());
+    }
+
+    /// 回归测试（真实事故 2026-11-16）：把目录搬进它自己的子树曾被
+    /// copy 兜底无限自我复制出 306 层嵌套空目录。现在必须直接拒绝，
+    /// 且源目录完好无损。
+    #[test]
+    fn test_move_path_rejects_self_nesting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(a.join("应用").join("桌面整理")).unwrap();
+        std::fs::write(a.join("重要文件.txt"), "x").unwrap();
+
+        // 目标 = 源的内部子孙
+        let dst = a.join("应用").join("桌面整理").join("a");
+        assert!(move_path(&a, &dst).is_err(), "搬进自身子树必须被拒绝");
+        // 直接子目录也不行
+        let dst2 = a.join("应用").join("a");
+        assert!(move_path(&a, &dst2).is_err(), "搬进直接子目录必须被拒绝");
+        // 目标与源相同
+        assert!(move_path(&a, &a).is_err(), "自我覆盖必须被拒绝");
+        // 源完好
+        assert!(a.join("重要文件.txt").exists());
+        assert!(!dst.exists() && !dst2.exists());
+        // 正常移动不受影响
+        let ok = tmp.path().join("b");
+        move_path(&a, &ok).unwrap();
+        assert!(ok.join("重要文件.txt").exists());
+    }
+
+    /// 移动日志与撤销：undo_last_batch_in 只反向搬回最近一个批次
+    #[test]
+    fn test_journal_undo_last_batch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let desktop = tmp.path().join("Desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let cfg = cfg_with_storage(tmp.path());
+        let storage = scan::resolve_storage_root(&cfg);
+        let journal_dir = tmp.path().join("journal");
+        std::fs::create_dir_all(&journal_dir).unwrap();
+
+        let move_and_journal = |name: &str, batch: u64| -> PathBuf {
+            std::fs::write(desktop.join(name), "x").unwrap();
+            let to = unique_destination(&storage.join("文档"), name);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            move_path(&desktop.join(name), &to).unwrap();
+            let e = MovedEntry {
+                from: desktop.join(name).to_string_lossy().to_string(),
+                to: to.to_string_lossy().to_string(),
+                category: "docs".into(),
+            };
+            journal_write_batch(&journal_dir, batch, std::slice::from_ref(&e));
+            to
+        };
+        let to1 = move_and_journal("a.txt", 1000);
+        let to2 = move_and_journal("b.txt", 2000);
+
+        // 撤销最近批次 → 只有 b.txt 回桌面；a.txt 仍在收纳区
+        let r = undo_last_batch_in(&journal_dir);
+        assert_eq!(r.moved.len(), 1, "{r:?}");
+        assert!(desktop.join("b.txt").exists());
+        assert!(!to2.exists());
+        assert!(to1.exists(), "更早批次不应被撤销");
+        assert!(!desktop.join("a.txt").exists());
+
+        // 再撤销一次 → a.txt 也回来；日志清空
+        let r2 = undo_last_batch_in(&journal_dir);
+        assert_eq!(r2.moved.len(), 1, "{r2:?}");
+        assert!(desktop.join("a.txt").exists());
+        assert!(!to1.exists());
+        let r3 = undo_last_batch_in(&journal_dir);
+        assert!(r3.moved.is_empty() && r3.skipped == 1, "空日志应 skipped: {r3:?}");
+    }
+
+    /// 自愈：分类文件夹里出现与存储根同名的嵌套骨架（空目录树）→ 删除；
+    /// 含文件的嵌套副本 → 搬到桌面交还用户。
+    #[test]
+    fn test_cleanup_nested_storage_junk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let desktop = tmp.path().join("Desktop");
+        let storage = tmp.path().join("收纳"); // 存储根名 = “收纳”
+        std::fs::create_dir_all(&desktop).unwrap();
+
+        // 1) 空骨架：其他\收纳\应用\收纳\应用\收纳\…（分类文件夹=其他）
+        let skeleton = storage.join("其他").join("收纳");
+        std::fs::create_dir_all(skeleton.join("应用").join("收纳").join("应用")).unwrap();
+        std::fs::create_dir_all(skeleton.join("其他")).unwrap();
+
+        // 2) 含文件的嵌套副本：应用\收纳\资料.docx（分类文件夹=应用）
+        let victim = storage.join("应用").join("收纳");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("资料.docx"), "x").unwrap();
+
+        let cfg = cfg_with_storage(tmp.path());
+        let (removed, rescued) = cleanup_nested_storage_junk_in(&cfg, &desktop);
+        assert_eq!(removed, 1, "空骨架应被删除");
+        assert_eq!(rescued, 1, "含文件副本应被搬到桌面");
+        assert!(!skeleton.exists());
+        assert!(storage.join("其他").exists(), "分类文件夹本身保留");
+        // 桌面上出现抢救目录（桌面此时无同名项 → 直接叫“收纳”）
+        assert!(desktop.join("收纳").join("资料.docx").exists(), "资料.docx 应随目录被搬出");
+    }
+
+    /// 一键还原：所有启用盒子的内容回到桌面根；desktop.ini 跳过
+    #[test]
+    fn test_restore_all_to_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let desktop = tmp.path().join("Desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let cfg = cfg_with_storage(tmp.path());
+        let storage = scan::resolve_storage_root(&cfg);
+
+        std::fs::create_dir_all(storage.join("文档")).unwrap();
+        std::fs::create_dir_all(storage.join("应用")).unwrap();
+        std::fs::write(storage.join("文档").join("a.pdf"), "x").unwrap();
+        std::fs::write(storage.join("应用").join("b.lnk"), "x").unwrap();
+        std::fs::write(storage.join("文档").join("desktop.ini"), "x").unwrap();
+
+        let r = restore_all_to_dir(&cfg, &desktop);
+        assert_eq!(r.moved.len(), 2, "{:?}", r);
+        assert!(desktop.join("a.pdf").exists());
+        assert!(desktop.join("b.lnk").exists());
+        assert!(!desktop.join("desktop.ini").exists(), "desktop.ini 不应被还原");
+        assert!(storage.join("文档").join("desktop.ini").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_scan_skips_reparse_points() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let target = root.join("real");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("in.txt"), "x").unwrap();
+        let link = root.join("jlink");
+        let st = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .status()
+            .unwrap();
+        assert!(st.success(), "mklink /J should work without admin");
+        let c = crate::config::Config {
+            categories: crate::config::default_categories(),
+            ..Default::default()
+        };
+        let mut items = Vec::new();
+        crate::scan::scan_dir(root, &root.join("no-storage"), &c, false, &mut items);
+        let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+        assert!(
+            !names.contains(&"jlink"),
+            "junction 不应进入扫描结果: {names:?}"
+        );
+        assert!(names.contains(&"real"));
     }
 }
 

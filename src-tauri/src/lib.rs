@@ -91,6 +91,9 @@ pub fn run() {
             commands::delete_box,
             commands::organize_paths,
             commands::restore_paths,
+            commands::restore_all,
+            commands::undo_last_organize,
+            commands::repair_storage,
             commands::open_path,
             commands::reveal_path,
             commands::get_icons,
@@ -115,18 +118,30 @@ pub fn run() {
             // 首启保护：创建收纳盒目录会触发监听事件，
             // 抑制数秒内的自动整理，避免“一打开就搬光桌面”的惊吓。
             app.state::<AppState>().suppress_auto_organize(8);
-            // 单盒模型迁移（一次性，必须在创建盒子窗口之前）：
-            // 预设分类停用、旧分类内容并入收纳盒
-            {
-                let state = app.state::<AppState>();
-                let mut cfg = state.config_write();
-                let n = organize::migrate_single_box_files(&mut cfg);
-                drop(cfg);
-                if n > 0 {
-                    state.persist_config().ok();
-                    logging::log_line(&format!("migration merged {n} items"));
-                }
-            }
+    // 单盒模型迁移（一次性，必须在创建盒子窗口之前）：
+    // 预设分类停用、旧分类内容并入收纳盒
+    {
+        let state = app.state::<AppState>();
+        let mut cfg = state.config_write();
+        let n = organize::migrate_single_box_files(&mut cfg);
+        drop(cfg);
+        if n > 0 {
+            state.persist_config().ok();
+            logging::log_line(&format!("migration merged {n} items"));
+        }
+    }
+    // 存储区自愈：清理历史上“目录被搬进自身子树”产生的嵌套骨架
+    // （必须发生在扫描/建盒之前，避免垃圾结构进入盒子视图）
+    {
+        let state = app.state::<AppState>();
+        let cfg = state.config_read().clone();
+        let (removed, rescued) = organize::cleanup_nested_storage_junk(&cfg);
+        if removed + rescued > 0 {
+            logging::log_line(&format!(
+                "startup self-heal: removed {removed} skeletons, rescued {rescued} copies"
+            ));
+        }
+    }
             logging::log_line("setup: begin");
             create_main_window(&handle)?;
             logging::log_line("setup: main window ok");
@@ -277,8 +292,9 @@ fn create_main_window(app: &tauri::AppHandle) -> Result<(), String> {
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
     let organize_now = MenuItem::with_id(app, "organize", "立即整理桌面", true, None::<&str>)?;
+    let restore_all = MenuItem::with_id(app, "restore_all", "一键还原桌面", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 PureDesk", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &organize_now, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &organize_now, &restore_all, &quit])?;
 
     TrayIconBuilder::with_id("puredesk-tray")
         .icon(app.default_window_icon().expect("missing app icon").clone())
@@ -296,6 +312,23 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let cfg = state.config_read().clone();
                     let guard = state.move_guard();
                     let report = organize::organize_desktop(&cfg, None);
+                    drop(guard);
+                    crate::refresh_storage_visibility(&app);
+                    let _ = app.emit("organize-report", &report);
+                    let _ = app.emit("scan-changed", ());
+                    let _ = app.emit("boxes-changed", ());
+                });
+            }
+            "restore_all" => {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let Some(state) = app.try_state::<AppState>() else {
+                        return;
+                    };
+                    state.suppress_auto_organize(8);
+                    let cfg = state.config_read().clone();
+                    let guard = state.move_guard();
+                    let report = organize::restore_all_to_desktop(&cfg);
                     drop(guard);
                     crate::refresh_storage_visibility(&app);
                     let _ = app.emit("organize-report", &report);

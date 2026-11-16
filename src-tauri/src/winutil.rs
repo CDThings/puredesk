@@ -3,6 +3,10 @@
 use std::path::PathBuf;
 use tauri::WebviewWindow;
 
+/// FILE_ATTRIBUTE_REPARSE_POINT：junction/symlink 标记位。
+/// 带此属性的条目一律不参与扫描/整理/复制，防止成环路径进入收纳流。
+pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
 #[cfg(windows)]
 pub fn known_folder(folder_id: &windows_sys::core::GUID) -> Option<PathBuf> {
     use windows_sys::Win32::System::Com::CoTaskMemFree;
