@@ -90,6 +90,22 @@ impl Category {
     }
 }
 
+/// 收纳岛（顶部灵动岛式状态胶囊）配置
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct IslandCfg {
+    pub enabled: bool,
+    /// 胶囊左上角（逻辑像素）；0,0 表示未定位，窗口创建时按主屏顶部居中计算
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Default for IslandCfg {
+    fn default() -> Self {
+        Self { enabled: true, x: 0.0, y: 0.0 }
+    }
+}
+
 /// 收纳盒窗口的几何与显示状态（逻辑像素）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -136,6 +152,9 @@ pub struct Config {
     /// 收纳盒图标基准大小（px）；None=默认 30。前端据此设置 CSS 变量 --icon
     #[serde(default)]
     pub icon_size: Option<u32>,
+    /// 收纳岛（顶部灵动岛式状态胶囊）；默认启用
+    #[serde(default)]
+    pub island: IslandCfg,
     pub categories: Vec<Category>,
     /// 排除规则（支持 * 与 ? 通配，匹配文件名，不区分大小写）
     pub excludes: Vec<String>,
@@ -166,6 +185,7 @@ impl Default for Config {
             hide_storage_folder: false,
             migrated_single_box: true,
             icon_size: None,
+            island: IslandCfg::default(),
             // 单盒模型：只显示一个兜底「收纳盒」，预设规则保留但默认停用。
             // 内置预设（含收纳盒）标记 built_in=true → 不可删除（防误删）；
             // 用户新建盒子一律 built_in=false → 可删除（文件自动还原到桌面）。
@@ -322,6 +342,17 @@ mod tests {
         let cfg: Config = serde_json::from_str(s).unwrap();
         assert!(!cfg.auto_organize);
         assert_eq!(cfg.categories.len(), 9); // inbox + 8 预设
+        // 老配置缺 island 字段 → 默认启用收纳岛
+        assert!(cfg.island.enabled);
+    }
+
+    #[test]
+    fn test_island_cfg_roundtrip() {
+        let cfg = Config { island: IslandCfg { enabled: false, x: 123.5, y: 8.0 }, ..Default::default() };
+        let s = serde_json::to_string(&cfg).unwrap();
+        assert!(s.contains(r#""island":{"enabled":false,"x":123.5,"y":8.0}"#));
+        let back: Config = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.island, cfg.island);
     }
 
     #[test]

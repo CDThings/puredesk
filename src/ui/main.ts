@@ -515,6 +515,7 @@ function renderSettings(): void {
       <label class="switch"><input type="checkbox" id="set-public" ${config.organizePublicDesktop ? "checked" : ""}><i></i><span>整理公共桌面</span></label>
       <label class="switch"><input type="checkbox" id="set-autostart" ${autostart ? "checked" : ""}><i></i><span>开机自启</span></label>
       <label class="switch"><input type="checkbox" id="set-hide-folder" ${config.hideStorageFolder ? "checked" : ""}><i></i><span>隐藏桌面上的收纳文件夹</span></label>
+      <label class="switch" title="屏幕顶部的灵动岛式状态胶囊：悬停展开收纳区全貌"><input type="checkbox" id="set-island" ${config.island.enabled ? "checked" : ""}><i></i><span>显示收纳岛</span></label>
       <label class="sel-wrap">关闭主面板
         <select class="in" id="set-close">
           <option value="minimize" ${config.closeAction !== "exit" ? "selected" : ""}>最小化到托盘</option>
@@ -568,6 +569,8 @@ async function saveSettings(): Promise<void> {
   cfg.organizePublicDesktop = page.querySelector<HTMLInputElement>("#set-public")!.checked;
   cfg.hideStorageFolder = page.querySelector<HTMLInputElement>("#set-hide-folder")!.checked;
   cfg.closeAction = page.querySelector<HTMLSelectElement>("#set-close")!.value === "exit" ? "exit" : "minimize";
+  const wantIsland = page.querySelector<HTMLInputElement>("#set-island")!.checked;
+  cfg.island = { ...cfg.island, enabled: wantIsland };
   const wantAutostart = page.querySelector<HTMLInputElement>("#set-autostart")!.checked;
   cfg.excludes = page
     .querySelector<HTMLTextAreaElement>("#set-excludes")!.value
@@ -595,6 +598,9 @@ async function saveSettings(): Promise<void> {
     if (wantAutostart !== autostart) {
       await api.setAutostart(wantAutostart);
       autostart = wantAutostart;
+    }
+    if (wantIsland !== config.island.enabled) {
+      await api.setIslandVisible(wantIsland);
     }
     toast("设置已保存");
     await refresh();

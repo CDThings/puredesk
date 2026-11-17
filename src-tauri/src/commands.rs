@@ -499,6 +499,20 @@ pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
+/// 展开/收起收纳岛（前端 hover 驱动；后端按当前尺寸幂等，抖动不会反复 resize）
+#[tauri::command]
+pub async fn island_expand(app: AppHandle, expanded: bool) -> Result<(), String> {
+    crate::islandwin::set_expanded(&app, expanded)
+}
+
+/// 显示/隐藏收纳岛（设置页与托盘共用；持久化 enabled 并同步窗口）
+#[tauri::command]
+pub async fn set_island_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    crate::islandwin::set_visible(&app, visible)?;
+    notify_changes(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn hide_main(app: AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("main") {

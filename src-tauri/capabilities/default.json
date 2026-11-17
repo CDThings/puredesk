@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "PureDesk 默认能力：主面板与收纳盒窗口",
-  "windows": ["main", "box-*"],
+  "description": "PureDesk 默认能力：主面板、收纳盒与收纳岛窗口",
+  "windows": ["main", "box-*", "island"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

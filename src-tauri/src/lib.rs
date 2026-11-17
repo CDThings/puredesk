@@ -12,6 +12,7 @@ mod config;
 #[cfg(windows)]
 mod droptarget;
 mod icons;
+mod islandwin;
 mod logging;
 mod organize;
 mod scan;
@@ -109,6 +110,8 @@ pub fn run() {
             commands::set_box_icon_size,
             commands::set_autostart,
             commands::get_autostart,
+            commands::island_expand,
+            commands::set_island_visible,
             commands::hide_main,
             commands::quit_app,
         ])
@@ -166,6 +169,11 @@ pub fn run() {
                 logging::log_line(&format!("setup: boxwin sync failed (recoverable): {e}"));
             }
             logging::log_line("setup: boxes ok");
+            // 收纳岛创建失败同样不拖垮应用：主面板/托盘/盒子保持可用
+            if let Err(e) = islandwin::sync(&handle) {
+                logging::log_line(&format!("setup: island sync failed (recoverable): {e}"));
+            }
+            logging::log_line("setup: island ok");
             refresh_storage_visibility(&handle);
             // 透明盒子的 Chrome 子窗口出现较晚，延后重新注入拖放目标
             #[cfg(windows)]
@@ -293,8 +301,9 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
     let organize_now = MenuItem::with_id(app, "organize", "立即整理桌面", true, None::<&str>)?;
     let restore_all = MenuItem::with_id(app, "restore_all", "一键还原桌面", true, None::<&str>)?;
+    let island = MenuItem::with_id(app, "island", "显示/隐藏收纳岛", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 PureDesk", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &organize_now, &restore_all, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &organize_now, &restore_all, &island, &quit])?;
 
     TrayIconBuilder::with_id("puredesk-tray")
         .icon(app.default_window_icon().expect("missing app icon").clone())
@@ -334,6 +343,19 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let _ = app.emit("organize-report", &report);
                     let _ = app.emit("scan-changed", ());
                     let _ = app.emit("boxes-changed", ());
+                });
+            }
+            "island" => {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let Some(state) = app.try_state::<AppState>() else {
+                        return;
+                    };
+                    let cur = state.config_read().island.enabled;
+                    if let Err(e) = islandwin::set_visible(&app, !cur) {
+                        logging::log_line(&format!("toggle island failed: {e}"));
+                    }
+                    let _ = app.emit("scan-changed", ());
                 });
             }
             "quit" => app.exit(0),
@@ -378,7 +400,8 @@ fn schedule_pin(app: tauri::AppHandle, id: String) {
 fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     let label = window.label().to_string();
     let is_box = label.starts_with("box-");
-    if !is_box && label != "main" {
+    let is_island = label == islandwin::LABEL;
+    if !is_box && !is_island && label != "main" {
         return;
     }
     match event {
@@ -435,7 +458,11 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
             }
         }
         WindowEvent::CloseRequested { api, .. } => {
-            if is_box {
+            if is_island {
+                // 收纳岛：关闭=隐藏（常驻小组件；Alt+F4 / 系统关闭请求都不退出）
+                api.prevent_close();
+                let _ = window.hide();
+            } else if is_box {
                 // 盒子：关闭=隐藏（小组件常驻）
                 api.prevent_close();
                 let _ = window.hide();

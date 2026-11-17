@@ -26,6 +26,14 @@ export interface BoxCfg {
   visible: boolean;
 }
 
+/** 收纳岛（顶部灵动岛式状态胶囊）配置 */
+export interface IslandCfg {
+  enabled: boolean;
+  /** 胶囊左上角（逻辑像素）；0,0 表示未定位，由后端按主屏顶部居中计算 */
+  x: number;
+  y: number;
+}
+
 export interface Config {
   storageRoot: string | null;
   autoOrganize: boolean;
@@ -34,6 +42,8 @@ export interface Config {
   hideStorageFolder: boolean;
   /** 收纳盒图标基准大小（px）；缺省=30 */
   iconSize?: number | null;
+  /** 收纳岛（顶部灵动岛式状态胶囊） */
+  island: IslandCfg;
   categories: Category[];
   excludes: string[];
   boxes: BoxCfg[];
@@ -117,6 +127,10 @@ export const api = {
   setBoxIconSize: (size: number) => invoke<void>("set_box_icon_size", { size }),
   setAutostart: (enable: boolean) => invoke<void>("set_autostart", { enable }),
   getAutostart: () => invoke<boolean>("get_autostart"),
+  /** 展开/收起收纳岛（悬停驱动；后端幂等） */
+  islandExpand: (expanded: boolean) => invoke<void>("island_expand", { expanded }),
+  /** 显示/隐藏收纳岛（设置页与托盘共用） */
+  setIslandVisible: (visible: boolean) => invoke<void>("set_island_visible", { visible }),
   hideMain: () => invoke<void>("hide_main"),
   quit: () => invoke<void>("quit_app"),
 };

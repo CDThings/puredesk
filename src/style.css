@@ -94,3 +94,94 @@
 /* 盒头图标大小调节按钮 */
 .bw-iconbtn { width: 20px; height: 20px; border-radius: 6px; }
 .bw-iconbtn svg { width: 11px; height: 11px; }
+
+/* ============ 收纳岛（顶部灵动岛式状态胶囊，#island 窗口） ============ */
+.island {
+  width: 100vw; height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  overflow: hidden;
+}
+.island-pill {
+  position: relative;
+  margin-top: 2px; height: 36px; padding: 0 14px;
+  display: inline-flex; align-items: center; gap: 8px;
+  white-space: nowrap; cursor: pointer; user-select: none;
+  background: var(--bg); backdrop-filter: blur(22px) saturate(1.25);
+  border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 4px 18px #0007;
+  text-shadow: 0 1px 2px rgba(0,0,0,.5);
+  transition: transform .18s ease, border-color .18s ease;
+}
+.island-pill:hover { transform: scale(1.05); border-color: rgba(91,140,255,.55); }
+.island-pill.island-warn { border-color: rgba(255,95,95,.6); }
+/* organize-report 到达：呼吸扩散一圈（灵动岛的"活动"反馈） */
+.island-pill.island-anim { animation: island-pulse .55s ease-out 2; }
+@keyframes island-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(91,140,255,.45); }
+  70% { box-shadow: 0 0 0 16px rgba(91,140,255,0); }
+  100% { box-shadow: 0 4px 18px #0007; }
+}
+.island-ico { display: inline-flex; color: var(--accent); }
+.island-ico svg { width: 15px; height: 15px; }
+.island-label { font-size: 12px; font-weight: 600; }
+.island-stored { font-size: 11px; color: var(--txt-dim); }
+.island-badge {
+  min-width: 20px; padding: 1px 7px; text-align: center;
+  border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  box-shadow: 0 1px 6px rgba(91,140,255,.45);
+}
+.island-ok { display: inline-flex; color: #34c77b; }
+.island-ok svg { width: 12px; height: 12px; }
+.island-activity {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  padding: 2px 12px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+  background: rgba(91,140,255,.22); color: var(--txt);
+  border: 1px solid rgba(91,140,255,.4);
+}
+.island-pill.island-warn .island-activity {
+  background: rgba(255,95,95,.2); border-color: rgba(255,95,95,.45);
+}
+/* 展开面板：向下延伸的玻璃卡（分类明细 + 待整理 + 快捷操作） */
+.island-panel {
+  margin-top: 6px; width: 320px; height: 288px;
+  display: flex; flex-direction: column;
+  background: var(--bg); backdrop-filter: blur(28px) saturate(1.25);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 12px 36px #0008;
+  padding: 10px; text-shadow: 0 1px 2px rgba(0,0,0,.4);
+  animation: island-panel-in .16s ease-out;
+}
+@keyframes island-panel-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.island-cats { flex: none; max-height: 122px; overflow-y: auto; }
+.island-cat {
+  width: 100%; padding: 6px 9px; display: flex; align-items: center; gap: 8px;
+  border: none; border-radius: 8px; background: transparent;
+  color: var(--txt); font-size: 12px; text-align: left; cursor: pointer;
+}
+.island-cat:hover { background: var(--bg-hover); }
+.island-cat i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.island-cat b { margin-left: auto; font-weight: 600; color: var(--txt-dim); }
+.island-sep { height: 1px; background: var(--line); margin: 8px 0; flex: none; }
+.island-todo-title { font-size: 11px; color: var(--txt-dim); margin-bottom: 4px; flex: none; }
+.island-todo { flex: 1; min-height: 0; overflow-y: auto; }
+.island-todo-item {
+  width: 100%; padding: 5px 9px; display: flex; align-items: center; gap: 6px;
+  border: none; border-radius: 8px; background: transparent;
+  color: var(--txt); font-size: 12px; text-align: left; cursor: pointer;
+}
+.island-todo-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.island-todo-item:hover { background: var(--bg-hover); color: var(--accent-2); }
+.island-todo-more { padding: 4px 9px; font-size: 11px; color: var(--txt-dim); }
+.island-empty { padding: 8px 9px; font-size: 11.5px; color: var(--txt-dim); }
+.island-actions { flex: none; display: flex; gap: 6px; margin-top: 8px; }
+.island-actions button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 6px 4px; border-radius: 8px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg-soft); color: var(--txt);
+}
+.island-actions button:hover { border-color: var(--accent); color: #fff; }
+.island-actions button svg { width: 12px; height: 12px; flex: none; }
