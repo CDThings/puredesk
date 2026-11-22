@@ -1,7 +1,7 @@
 {
   "name": "puredesk",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "description": "PureDesk · 轻量级 Windows 桌面整理收纳工具（Tauri 2 + TypeScript）",
   "scripts": {
